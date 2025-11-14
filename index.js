@@ -3,7 +3,7 @@ const path = require('path');
 const { PNG } = require('pngjs');
 
 // Default config
-let INPUT = path.join(__dirname, 'dd2.png');
+let INPUT = null; // No default input file required
 let OUTPUT = path.join(__dirname, 'output.stl');
 let THICKNESS_MM = 2.0; // extrusion depth for black pixels
 let SCALE_MM_PER_PX = 0.2645833333; // default mm per pixel (96 DPI)
@@ -203,119 +203,6 @@ async function generate(options = {}) {
 
 module.exports = { generate };
 
-async function main() {
-  if (!fs.existsSync(INPUT)) {
-    console.error('Input file dd2.png not found in project root.');
-    process.exit(1);
-  }
-
-  const data = fs.readFileSync(INPUT);
-  const png = PNG.sync.read(data);
-  const w = png.width;
-  const h = png.height;
-  const pdata = png.data;
-
-  // Create a simple binary mask for black pixels
-  const mask = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const r = pdata[i];
-      const g = pdata[i + 1];
-      const b = pdata[i + 2];
-      const a = pdata[i + 3];
-      const gray = a === 0 ? 255 : Math.round((r + g + b) / 3);
-      mask[y * w + x] = gray < THRESHOLD ? 1 : 0;
-    }
-  }
-
-  // Build mesh by extruding each black pixel. Only create side faces when neighbor is empty
-  // If user supplied a target real-world width or height, compute scale mm/px
-  const mmScale = (() => {
-    const dataWidthPx = w;
-    const dataHeightPx = h;
-    const targetW = process.env._WIDTH_MM ? parseFloat(process.env._WIDTH_MM) : null;
-    const targetH = process.env._HEIGHT_MM ? parseFloat(process.env._HEIGHT_MM) : null;
-    if (targetW) {
-      return targetW / dataWidthPx;
-    }
-    if (targetH) {
-      return targetH / dataHeightPx;
-    }
-    return SCALE_MM_PER_PX;
-  })();
-
-  console.log('Using scale (mm/px):', mmScale.toFixed(6));
-  console.log('Resulting model size (mm):', (w * mmScale).toFixed(2), '×', (h * mmScale).toFixed(2));
-  const triangles = [];
-
-  const idx = (xx, yy) => yy * w + xx;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (!mask[y * w + x]) continue;
-      // pixel corners in mm (flip y so origin at bottom-left)
-      const x0 = x * mmScale;
-      const x1 = (x + 1) * mmScale;
-      const y0 = (h - y - 1) * mmScale;
-      const y1 = (h - y) * mmScale;
-      const zTop = THICKNESS_MM;
-      const zBot = 0;
-
-      const c00 = [x0, y0, zTop]; // bottom-left top
-      const c10 = [x1, y0, zTop]; // bottom-right top
-      const c11 = [x1, y1, zTop]; // top-right top
-      const c01 = [x0, y1, zTop]; // top-left top
-
-      const b00 = [x0, y0, zBot];
-      const b10 = [x1, y0, zBot];
-      const b11 = [x1, y1, zBot];
-      const b01 = [x0, y1, zBot];
-
-      // top face (two triangles)
-      triangles.push([c01, c11, c10]);
-      triangles.push([c01, c10, c00]);
-      // bottom face (two triangles) - reverse winding
-      triangles.push([b11, b01, b00]);
-      triangles.push([b11, b00, b10]);
-
-      // side faces only where neighboring pixel is empty
-      // left neighbor
-      if (x === 0 || !mask[idx(x - 1, y)]) {
-        // left quad between c01-c00 and b00-b01
-        triangles.push([c01, b01, b00]);
-        triangles.push([c01, b00, c00]);
-      }
-      // right neighbor
-      if (x === w - 1 || !mask[idx(x + 1, y)]) {
-        // right quad between c10-c11 and b11-b10
-        triangles.push([c10, b10, b11]);
-        triangles.push([c10, b11, c11]);
-      }
-      // bottom neighbor (y+1 is below since y increases downward) - neighbor below is y+1
-      if (y === h - 1 || !mask[idx(x, y + 1)]) {
-        // bottom quad between c00-c10 and b10-b00
-        triangles.push([c00, b00, b10]);
-        triangles.push([c00, b10, c10]);
-      }
-      // top neighbor (y-1)
-      if (y === 0 || !mask[idx(x, y - 1)]) {
-        // top quad between c11-c01 and b01-b11
-        triangles.push([c11, b11, b01]);
-        triangles.push([c11, b01, c01]);
-      }
-    }
-  }
-
-  if (triangles.length === 0) {
-    console.error('No black regions detected.');
-    process.exit(1);
-  }
-
-  const buffer = meshTrianglesToBinarySTL(triangles, 'extruded');
-  fs.writeFileSync(OUTPUT, buffer);
-  console.log('Wrote', OUTPUT);
-}
-
 function meshTrianglesToBinarySTL(triangles, name = '') {
   // triangles: array of [[x,y,z],[x,y,z],[x,y,z]]
   const header = Buffer.alloc(80);
@@ -359,6 +246,27 @@ function meshTrianglesToBinarySTL(triangles, name = '') {
 // CLI entrypoint (backwards compatible)
 async function main() {
   try {
+    // Check if input file is provided
+    if (!INPUT) {
+      console.log('Usage: node index.js --input <image.png> [options]');
+      console.log('Options:');
+      console.log('  --input <file>          Input PNG file (required)');
+      console.log('  --output <file>         Output STL file (default: output.stl)');
+      console.log('  --thickness-mm <num>    Extrusion thickness in mm (default: 2.0)');
+      console.log('  --threshold <num>       Grayscale threshold 0-255 (default: 128)');
+      console.log('  --width-mm <num>        Target width in mm');
+      console.log('  --height-mm <num>       Target height in mm');
+      console.log('  --max-px <num>          Maximum pixels on long side');
+      console.log('  --target-mb <num>       Target file size in MB');
+      console.log('\nFor web interface, run: node server.js');
+      process.exit(0);
+    }
+    
+    if (!fs.existsSync(INPUT)) {
+      console.error('Input file not found:', INPUT);
+      process.exit(1);
+    }
+    
     const opts = { input: INPUT, output: OUTPUT, thickness: THICKNESS_MM, threshold: THRESHOLD };
     // honor CLI width/height via env set earlier
     if (process.env._WIDTH_MM) opts.width_mm = parseFloat(process.env._WIDTH_MM);
