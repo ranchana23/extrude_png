@@ -186,7 +186,8 @@
   </head>
   <body>
     <h1>Extrude PNG to STL</h1>
-    <form id="form" method="post" enctype="multipart/form-data" action="/generate">
+    <form id="form">
+      <!-- Removed server-side form submission, using client-side processing instead -->
       <label>📁 เลือกไฟล์ PNG:</label>
       <input id="file" type="file" name="image" accept="image/png" required>
       
@@ -223,7 +224,8 @@
         </div>
       </div>
       <div style="margin-top:25px; text-align:center;">
-        <button id="generate" type="submit" disabled>🚀 Generate STL File</button>
+        <button id="generate" type="button" disabled>🚀 Generate STL File</button>
+        <div id="progress" style="margin-top:10px; color:#666; font-size:14px;"></div>
       </div>
     </form>
 
@@ -249,6 +251,9 @@
       <p>ผลลัพธ์จะถูกดาวน์โหลดเป็นไฟล์ STL ในทันทีหลังกด Generate</p>
     </div>
 
+    <!-- Load PNG to STL converter -->
+    <script src="png-to-stl.js"></script>
+    
     <script>
       const fileInput = document.getElementById('file');
       const orig = document.getElementById('orig');
@@ -317,6 +322,65 @@
       thresholdInput.addEventListener('input', ()=>{ if (currentImg) drawPreview(currentImg, parseInt(thresholdInput.value,10)); });
       widthInput.addEventListener('input', ()=>{ if (currentImg) drawPreview(currentImg, parseInt(thresholdInput.value,10)); });
       heightInput.addEventListener('input', ()=>{ if (currentImg) drawPreview(currentImg, parseInt(thresholdInput.value,10)); });
+
+      // Client-side STL generation
+      generateBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) {
+          alert('กรุณาเลือกไฟล์ PNG ก่อน');
+          return;
+        }
+
+        const progressDiv = document.getElementById('progress');
+        const generateBtn = document.getElementById('generate');
+        
+        try {
+          generateBtn.disabled = true;
+          progressDiv.textContent = '⏳ กำลังประมวลผล...';
+
+          // Get form values
+          const thickness = parseFloat(document.getElementById('thickness').value) || 2.0;
+          const threshold = parseInt(document.getElementById('threshold').value, 10) || 128;
+          const width_mm = document.getElementById('width').value ? parseFloat(document.getElementById('width').value) : null;
+          const height_mm = document.getElementById('height').value ? parseFloat(document.getElementById('height').value) : null;
+          const max_px = document.getElementById('max_px').value ? parseInt(document.getElementById('max_px').value, 10) : null;
+          const target_mb = document.getElementById('target_mb').value ? parseFloat(document.getElementById('target_mb').value) : null;
+
+          // Create converter and generate STL
+          const converter = new PNGToSTLConverter();
+          const stlBlob = await converter.generateSTL(file, {
+            thickness,
+            threshold,
+            width_mm,
+            height_mm,
+            max_px,
+            target_mb
+          });
+
+          // Download the file
+          const url = URL.createObjectURL(stlBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'model.stl';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          progressDiv.textContent = '✅ สร้างไฟล์ STL สำเร็จ! กำลังดาวน์โหลด...';
+          setTimeout(() => {
+            progressDiv.textContent = '';
+            generateBtn.disabled = false;
+          }, 3000);
+
+        } catch (err) {
+          console.error('Error generating STL:', err);
+          progressDiv.textContent = '❌ เกิดข้อผิดพลาด: ' + err.message;
+          generateBtn.disabled = false;
+        }
+      });
     </script>
 
     <div class="preview-container">
